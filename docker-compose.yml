@@ -1,0 +1,59 @@
+services:
+  # ==============================================================================
+  # 1. DATA LAKE LOCAL: Silo (Compatível com AWS S3 / MinIO)
+  # ==============================================================================
+  silo:
+    image: pgsty/silo:latest
+    container_name: datalake-silo
+    restart: unless-stopped
+    ports:
+      - "9000:9000" # API S3: Endpoint acessível via localhost pelo Spark local
+      - "9001:9001" # Web UI Console: Acesso via navegador (http://localhost:9001)
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: password123
+    command: server /data --console-address ":9001"
+    volumes:
+      - silo_storage:/data
+    networks:
+      - datalake-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==============================================================================
+  # 2. INICIALIZADOR DE BUCKETS: Criação da estrutura Medallion + Landing
+  # ==============================================================================
+  createbuckets:
+    image: alpine:latest
+    container_name: datalake-init-buckets
+    restart: "no"
+    depends_on:
+      silo:
+        condition: service_healthy
+    volumes:
+      - silo_storage:/data
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Aguardando Silo estar totalmente pronto...';
+      echo 'Criando buckets e estrutura de pastas do Lakehouse...';
+      mkdir -p /data/lakehouse/landing /data/lakehouse/bronze /data/lakehouse/silver /data/lakehouse/gold;
+      mkdir -p /data/landing /data/bronze /data/silver /data/gold;
+      chmod -R 777 /data;
+      echo 'Estrutura de Buckets [lakehouse, landing, bronze, silver, gold] inicializada com sucesso!';
+      exit 0;
+      "
+    networks:
+      - datalake-net
+
+volumes:
+  silo_storage:
+    name: datalake_silo_storage
+    driver: local
+
+networks:
+  datalake-net:
+    name: datalake-net
+    driver: bridge
